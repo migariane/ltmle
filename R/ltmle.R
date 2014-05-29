@@ -10,7 +10,7 @@
 ltmle <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOutcome=NULL, Qform=NULL, gform=NULL, 
                   abar, rule=NULL, gbounds=c(0.01, 1), Yrange=NULL, deterministic.g.function=NULL, stratify=FALSE, 
                   SL.library=NULL, estimate.time=nrow(data) > 50, gcomp=FALSE, mhte.iptw=FALSE, 
-                  iptw.only=FALSE, deterministic.Q.function=NULL, variance.options=NULL) {
+                  iptw.only=FALSE, deterministic.Q.function=NULL, variance.options=NULL, cleanData=TRUE) {
   if (!is.null(rule)) {
     if (!(missing(abar) || is.null(abar))) stop("'abar' should not be specified when using a 'rule' function")
     abar <- t(apply(data, 1, rule))
@@ -138,7 +138,8 @@ CreateInputs <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, 
   #error checking (also get value for survivalOutcome if NULL)
   check.results <- CheckInputs(data, nodes, survivalOutcome, Qform, gform, gbounds, Yrange, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, msm.weights, deterministic.Q.function)
   survivalOutcome <- check.results$survivalOutcome
-  data <- CleanData(data, nodes, deterministic.Q.function, survivalOutcome)
+  if (cleanData) data <- CleanData(data, nodes, deterministic.Q.function, survivalOutcome)
+  if (!cleanData) message("Running without data cleaning routine")
   untransformed.data <- data
   transform.list <- TransformOutcomes(data, nodes, Yrange)
   data <- transform.list$data
