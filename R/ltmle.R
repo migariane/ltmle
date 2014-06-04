@@ -40,6 +40,9 @@ GetMSMInputsForLtmle <- function(abar, Ynodes) {
 }
 
 # run ltmle from the ltmleInputs object - this is used by both ltmle and ltmleMSM(pooledMSM=F)
+#----------------------------------------
+# OS 06/01/14: Modfied to return both unbounded (simple) and bounded versions of iptw estimator (mhte.iptw=F & mhte.iptw=T)
+#----------------------------------------
 LtmleFromInputs <- function(inputs) {
   msm.result <- ltmleMSM.private(inputs)
   iptw.list <- CalcIPTW(data=inputs$untransformed.data, inputs$nodes, abar=drop3(inputs$regimes[, , 1, drop=F]), drop3(msm.result$cum.g[, , 1, drop=F]), inputs$mhte.iptw) #get cum.g for regime 1 (there's only 1 regime)
@@ -53,8 +56,8 @@ LtmleFromInputs <- function(inputs) {
     tmle <- plogis(msm.result$beta)
     tmle.IC <- as.numeric(msm.result$IC)
   }
-  r$estimates <- c(tmle=tmle, iptw=iptw.list$iptw.estimate, naive=iptw.list$naive.estimate)
-  r$IC <- list(tmle=tmle.IC, iptw=iptw.list$iptw.IC)
+  r$estimates <- c(tmle=tmle, iptw.mhte=iptw.list$iptw.mhte.estimate, iptw=iptw.list$iptw.estimate, naive=iptw.list$naive.estimate)
+  r$IC <- list(tmle=tmle.IC, iptw.mhte=iptw.list$iptw.mhte.IC, iptw=iptw.list$iptw.IC)
   
   if (inputs$gcomp) {
     names(r$estimates)[1] <- names(r$IC)[1] <- "gcomp"
@@ -678,7 +681,7 @@ EstimateTime <- function(inputs) {
 summary.ltmle <- function(object, control.object=NULL, estimator=ifelse(object$gcomp, "gcomp", "tmle"), ...) {
   #object is treatment, control.object is control
   if (! is.null(control.object) && class(control.object) != "ltmle") stop("the control.object argument to summary.ltmle must be of class ltmle")
-  if (! estimator %in% c("tmle", "iptw", "gcomp", "naive")) stop("estimator should be one of: tmle, iptw, gcomp, naive")
+  if (! estimator %in% c("tmle", "iptw", "iptw.mhte", "gcomp", "naive")) stop("estimator should be one of: tmle, iptw, iptw.mhte, gcomp, naive")
   if (estimator == "tmle" && object$gcomp) stop("estimator 'tmle' is not available because ltmleMSM was called with gcomp=TRUE")
   if (estimator == "gcomp" && !object$gcomp) stop("estimator 'gcomp' is not available because ltmleMSM was called with gcomp=FALSE")
   #treatment.summary <- GetSummary(object$estimates[estimator], ifelse(estimator=="tmle", object$IC.cov, var(object$IC[[estimator]])), loggedIC=FALSE) #fixme
@@ -699,7 +702,7 @@ summary.ltmle <- function(object, control.object=NULL, estimator=ifelse(object$g
 # Get summary measures for MSM parameters (standard errors, p-values, confidence intervals)
 #' @S3method summary ltmleMSM
 summary.ltmleMSM <- function(object, estimator=ifelse(object$gcomp, "gcomp", "tmle"), ...) {
-  if (! estimator %in% c("tmle", "iptw", "gcomp")) stop("estimator should be one of: tmle, iptw, gcomp")
+  if (! estimator %in% c("tmle", "iptw", "iptw.mhte", "gcomp")) stop("estimator should be one of: tmle, iptw, iptw.mhte, gcomp")
   if (estimator == "tmle") {
     if (object$gcomp) stop("estimator 'tmle' is not available because ltmleMSM was called with gcomp=TRUE")
     estimate <- object$beta
@@ -920,18 +923,19 @@ CalcIPTW <- function(data, nodes, abar, cum.g, mhte.iptw) {
   g <- cum.g[index, ncol(cum.g)]
   
   iptw.IC <- rep(0, n)
+  iptw.mhte.IC <- rep(0, n)
   #TO DO: verify that these are both correct for Y outside 0,1
-  if (mhte.iptw) {
-    iptw.estimate <- sum( Y / g ) / sum(1 / g) 
-    iptw.IC[index] <- ((Y - iptw.estimate) / g) / (1/n * sum (1 / g))
-  } else {
+  # if (mhte.iptw) {
+    iptw.mhte.estimate <- sum( Y / g ) / sum(1 / g) 
+    iptw.mhte.IC[index] <- ((Y - iptw.mhte.estimate) / g) / (1/n * sum (1 / g))
+  # } else {
     iptw.estimate <- sum(Y / g) / n
     iptw.IC[index] <- Y / g  
-    iptw.IC <- iptw.IC - iptw.estimate 
-  }  
-  
+    iptw.IC <- iptw.IC - iptw.estimate
+  # }
   naive.estimate <- mean( (data[, final.Ynode])[index] )
-  return(list(iptw.estimate=iptw.estimate, naive.estimate=naive.estimate, iptw.IC=iptw.IC))
+
+  return(list(iptw.mhte.estimate=iptw.mhte.estimate, iptw.mhte.IC=iptw.mhte.IC, iptw.estimate=iptw.estimate, iptw.IC=iptw.IC, naive.estimate=naive.estimate))
 }
 
 # Parametric estimation of each g-factor
@@ -1022,7 +1026,14 @@ NodeToIndex <- function(data, node) {
 # Run GLM or SuperLearner
 Estimate <- function(form, data, subs, family, newdata, SL.library, type, nodes) {
   stopifnot(type %in% c("link", "response"))
-  data <- ConvertCensoringNodesToBinary(data, nodes$C) #convert factors to binaries for compatability with glm and some SL libraries
+
+  ############################################################
+  #05/29/14 OS: Problem area:
+  # data <- ConvertCensoringNodesToBinary(data, nodes$C) #convert factors to binaries for compatability with glm and some SL libraries
+  # replaced with
+  data[,nodes$C] <- ConvertCensoringNodesToBinary(data[,nodes$C]) #convert factors to binaries for compatability with glm and some SL libraries
+  ############################################################
+
   f <- as.formula(form)
   if (any(is.na(data[subs, LhsVars(f)]))) stop("NA in Estimate")
   if (is.null(SL.library) || length(RhsVars(f)) == 0) { #in a formula like "Y ~ 1", call glm
@@ -1528,8 +1539,8 @@ NonpooledMSM <- function(inputs) {
   num.final.Ynodes <- length(inputs$final.Ynodes)
   
   num.ACnodes <- sum(inputs$nodes$AC < max(inputs$final.Ynodes))
-  tmle <- iptw <- matrix(nrow=num.regimes, ncol=num.final.Ynodes)
-  IC <- IC.iptw <- array(dim=c(num.regimes, num.final.Ynodes, nrow(inputs$data)))
+  tmle <- iptw <- iptw.mhte <- matrix(nrow=num.regimes, ncol=num.final.Ynodes)
+  IC <- IC.iptw <- IC.iptw.mhte <- array(dim=c(num.regimes, num.final.Ynodes, nrow(inputs$data)))
   cum.g <- array(dim=c(nrow(inputs$data), num.ACnodes, num.regimes))
   weights <- GetMsmWeights(inputs)
   for (j in 1:num.final.Ynodes) {
@@ -1558,8 +1569,10 @@ NonpooledMSM <- function(inputs) {
         result <- LtmleFromInputs(inputs.subset)
         tmle[i, j] <- result$estimates[tmle.index]
         iptw[i, j] <- min(1, result$estimates["iptw"])
+        iptw.mhte[i, j] <- min(1, result$estimates["iptw.mhte"])
         IC[i, j, ] <- result$IC[[tmle.index]]
         IC.iptw[i, j, ] <- result$IC[["iptw"]]
+        IC.iptw.mhte[i, j, ] <- result$IC[["iptw.mhte"]]
       }
       if (j == num.final.Ynodes) {
         if (weights[i, j] == 0) {
@@ -1714,29 +1727,42 @@ ConvertCensoringNodes <- function(data, Cnodes, has.deterministic.functions=FALS
 }
 
 #Before passing data to SuperLearner, convert factors to binary
-ConvertCensoringNodesToBinary <- function(data, Cnodes) {
+# ConvertCensoringNodesToBinary <- function(data, Cnodes) {
+ConvertCensoringNodesToBinary <- function(Cdata) {
   CensoringToBinary <- function(x) {
-    if (! all(levels(x) %in% c("censored", "uncensored"))) {
-      stop("all levels of data[, Cnodes] should be in censored, uncensored (NA should not be a level)")
-    }
-    b <- rep(NA_integer_, length(x))
+    # if (! all(levels(x) %in% c("censored", "uncensored"))) {
+    #   stop("all levels of data[, Cnodes] should be in censored, uncensored (NA should not be a level)")
+    # }
+    # b <- rep(NA_integer_, length(x))
+    b <- matrix(data=NA_integer_, nrow=dim(x)[1], ncol=dim(x)[2])
     b[x == "censored"] <- 0L
     b[x == "uncensored"] <- 1L
     return(b)
   }
-  
   error.msg <- "in data, all Cnodes should be factors with two levels, 'censored' and 'uncensored' \n (binary is also accepted, where 0=censored, 1=uncensored, but is not recommended)"
-  for (i in Cnodes) {
-    col <- data[, i]
+  someC_num <- FALSE
+  someC_fact <- FALSE
+  for (i in c(1:ncol(Cdata))) {
+    col <- Cdata[, i]
     if (is.numeric(col)) {
       if (! all(col %in% c(0, 1, NA))) stop(error.msg)
+      someC_num <- TRUE
     } else if (is.factor(col)) {
-      data[, i] <- CensoringToBinary(col)
+      someC_fact <- TRUE
+      # data[, i] <- CensoringToBinary(col)
     } else {
       stop(error.msg)
-    } 
+    }
   }
-  return(data)
+  if (someC_num&someC_fact) stop(error.msg)
+  if (all(sapply(Cdata, is.factor))) {
+  # if (someC_fact) {
+    if (!all((as.vector(unlist(sapply(Cdata, levels))))%in%c("censored", "uncensored"))) {
+      stop("all levels of data[, Cnodes] should be in censored, uncensored (NA should not be a level)")
+    }
+    Cdata <- CensoringToBinary(Cdata)
+  }
+  return(Cdata)
 }
 
 # We don't want to show all of the warnings 
