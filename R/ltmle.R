@@ -7,9 +7,11 @@
 
 #longitudinal targeted maximum liklihood estimation for E[Y_a]
 #' @export
+# OS 06/01/2014: Added cleanData argument, if FALSE data cleaning is skipped (faster run time)
+# OS 06/19/2014: Added SLcvControl parameter, passes the CV controlling arguments to the SuperLearner
 ltmle <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOutcome=NULL, Qform=NULL, gform=NULL, 
                   abar, rule=NULL, gbounds=c(0.01, 1), Yrange=NULL, deterministic.g.function=NULL, stratify=FALSE, 
-                  SL.library=NULL, estimate.time=nrow(data) > 50, gcomp=FALSE, mhte.iptw=FALSE, 
+                  SL.library=NULL, SLcvControl = list(), estimate.time=nrow(data) > 50, gcomp=FALSE, mhte.iptw=FALSE, 
                   iptw.only=FALSE, deterministic.Q.function=NULL, variance.options=NULL, cleanData=TRUE) {
   if (!is.null(rule)) {
     if (!(missing(abar) || is.null(abar))) stop("'abar' should not be specified when using a 'rule' function")
@@ -22,7 +24,7 @@ ltmle <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOutcom
   }
   msm.inputs <- GetMSMInputsForLtmle(abar, Ynodes)
 
-  inputs <- CreateInputs(data=data, Anodes=Anodes, Cnodes=Cnodes, Lnodes=Lnodes, Ynodes=Ynodes, survivalOutcome=survivalOutcome, Qform=Qform, gform=gform, Yrange=Yrange, gbounds=gbounds, deterministic.g.function=deterministic.g.function, SL.library=SL.library, regimes=msm.inputs$regimes, working.msm=msm.inputs$working.msm, summary.measures=msm.inputs$summary.measures, summary.baseline.covariates=msm.inputs$summary.baseline.covariates, final.Ynodes=NULL, pooledMSM=TRUE, stratify=stratify, msm.weights=msm.inputs$msm.weights, estimate.time=estimate.time, gcomp=gcomp, normalizeIC=FALSE, mhte.iptw=mhte.iptw, iptw.only=iptw.only, deterministic.Q.function=deterministic.Q.function, variance.options=variance.options, cleanData=cleanData) 
+  inputs <- CreateInputs(data=data, Anodes=Anodes, Cnodes=Cnodes, Lnodes=Lnodes, Ynodes=Ynodes, survivalOutcome=survivalOutcome, Qform=Qform, gform=gform, Yrange=Yrange, gbounds=gbounds, deterministic.g.function=deterministic.g.function, SL.library=SL.library, SLcvControl=SLcvControl, regimes=msm.inputs$regimes, working.msm=msm.inputs$working.msm, summary.measures=msm.inputs$summary.measures, summary.baseline.covariates=msm.inputs$summary.baseline.covariates, final.Ynodes=NULL, pooledMSM=TRUE, stratify=stratify, msm.weights=msm.inputs$msm.weights, estimate.time=estimate.time, gcomp=gcomp, normalizeIC=FALSE, mhte.iptw=mhte.iptw, iptw.only=iptw.only, deterministic.Q.function=deterministic.Q.function, variance.options=variance.options, cleanData=cleanData) 
   result <- LtmleFromInputs(inputs)
   result$call <- match.call()
   return(result)
@@ -86,13 +88,13 @@ LtmleFromInputs <- function(inputs) {
 
 #longitudinal targeted maximum likelihood estimation for a marginal structural model
 #' @export 
-ltmleMSM <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOutcome=NULL, Qform=NULL, gform=NULL, gbounds=c(0.01, 1), Yrange=NULL, deterministic.g.function=NULL, SL.library=NULL, regimes, working.msm, summary.measures, summary.baseline.covariates=NULL, final.Ynodes=NULL, pooledMSM=TRUE, stratify=FALSE, msm.weights=NULL, estimate.time=nrow(data) > 50, gcomp=FALSE, mhte.iptw=FALSE, iptw.only=FALSE, deterministic.Q.function=NULL, memoize=TRUE, variance.options=NULL) {
+ltmleMSM <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOutcome=NULL, Qform=NULL, gform=NULL, gbounds=c(0.01, 1), Yrange=NULL, deterministic.g.function=NULL, SL.library=NULL, SLcvControl=list(), regimes, working.msm, summary.measures, summary.baseline.covariates=NULL, final.Ynodes=NULL, pooledMSM=TRUE, stratify=FALSE, msm.weights=NULL, estimate.time=nrow(data) > 50, gcomp=FALSE, mhte.iptw=FALSE, iptw.only=FALSE, deterministic.Q.function=NULL, memoize=TRUE, variance.options=NULL) {
   if (memoize && require(memoise)) {
     glm.ltmle.memoized <- memoize(glm.ltmle)
   }
   
   #normalizeIC parameter should always be TRUE except when being called by ltmle
-  inputs <- CreateInputs(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, Qform, gform, gbounds, Yrange, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, msm.weights, estimate.time, gcomp, normalizeIC=TRUE, mhte.iptw, iptw.only, deterministic.Q.function, variance.options)
+  inputs <- CreateInputs(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, Qform, gform, gbounds, Yrange, deterministic.g.function, SL.library, SLcvControl, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, msm.weights, estimate.time, gcomp, normalizeIC=TRUE, mhte.iptw, iptw.only, deterministic.Q.function, variance.options)
   result <- ltmleMSM.private(inputs)
   result$call <- match.call()
   return(result) 
@@ -112,7 +114,7 @@ ltmleMSM.private <- function(inputs) {
 }
 
 # create the ltmleInputs object used by many other functions - fills in defaults and does error checking
-CreateInputs <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, Qform, gform, gbounds, Yrange, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, msm.weights, estimate.time, gcomp, normalizeIC, mhte.iptw, iptw.only, deterministic.Q.function, variance.options, cleanData) {
+CreateInputs <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, Qform, gform, gbounds, Yrange, deterministic.g.function, SL.library, SLcvControl, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, msm.weights, estimate.time, gcomp, normalizeIC, mhte.iptw, iptw.only, deterministic.Q.function, variance.options, cleanData) {
 
   if (is.list(regimes)) {
     if (!all(do.call(c, lapply(regimes, is.function)))) stop("If 'regimes' is a list, then all elements should be functions.")
@@ -139,7 +141,7 @@ CreateInputs <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, 
   }
   
   #error checking (also get value for survivalOutcome if NULL)
-  check.results <- CheckInputs(data, nodes, survivalOutcome, Qform, gform, gbounds, Yrange, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, msm.weights, deterministic.Q.function)
+  check.results <- CheckInputs(data, nodes, survivalOutcome, Qform, gform, gbounds, Yrange, deterministic.g.function, SL.library, SLcvControl, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, msm.weights, deterministic.Q.function)
   survivalOutcome <- check.results$survivalOutcome
   if (cleanData) data <- CleanData(data, nodes, deterministic.Q.function, survivalOutcome)
   if (!cleanData) message("Running without data cleaning routine")
@@ -155,7 +157,7 @@ CreateInputs <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, 
   if (is.null(variance.options)) variance.options <- list(sparsityVarAdj=FALSE, gbounds.for.sparsity.adj=NA)
   
   
-  inputs <- list(data=data, untransformed.data=untransformed.data, nodes=nodes, survivalOutcome=survivalOutcome, Qform=Qform, gform=gform, gbounds=gbounds, Yrange=Yrange, deterministic.g.function=deterministic.g.function, SL.library.Q=SL.library.Q, SL.library.g=SL.library.g, regimes=regimes, working.msm=working.msm, summary.measures=summary.measures, summary.baseline.covariates=summary.baseline.covariates, final.Ynodes=final.Ynodes, pooledMSM=pooledMSM, stratify=stratify, msm.weights=msm.weights, estimate.time=estimate.time, gcomp=gcomp, normalizeIC=normalizeIC, mhte.iptw=mhte.iptw, iptw.only=iptw.only, deterministic.Q.function=deterministic.Q.function, binaryOutcome=binaryOutcome, transformOutcome=transformOutcome, sparsityVarAdj=variance.options$sparsityVarAdj, gbounds.for.sparsity.adj=variance.options$gbounds.for.sparsity.adj)
+  inputs <- list(data=data, untransformed.data=untransformed.data, nodes=nodes, survivalOutcome=survivalOutcome, Qform=Qform, gform=gform, gbounds=gbounds, Yrange=Yrange, deterministic.g.function=deterministic.g.function, SL.library.Q=SL.library.Q, SL.library.g=SL.library.g, SLcvControl=SLcvControl, regimes=regimes, working.msm=working.msm, summary.measures=summary.measures, summary.baseline.covariates=summary.baseline.covariates, final.Ynodes=final.Ynodes, pooledMSM=pooledMSM, stratify=stratify, msm.weights=msm.weights, estimate.time=estimate.time, gcomp=gcomp, normalizeIC=normalizeIC, mhte.iptw=mhte.iptw, iptw.only=iptw.only, deterministic.Q.function=deterministic.Q.function, binaryOutcome=binaryOutcome, transformOutcome=transformOutcome, sparsityVarAdj=variance.options$sparsityVarAdj, gbounds.for.sparsity.adj=variance.options$gbounds.for.sparsity.adj)
   class(inputs) <- "ltmleInputs"
   return(inputs)
 }
@@ -315,7 +317,7 @@ FixedTimeTMLE <- function(inputs, weights) {
   data <- inputs$data
   stacked.summary.measures <- GetStackedSummaryMeasures(inputs$summary.measures, data[, inputs$summary.baseline.covariates, drop=FALSE])
   nodes <- inputs$nodes
-    
+  
   num.regimes <- dim(inputs$regimes)[3]
   n <- nrow(data)
   num.betas <- ncol(model.matrix(as.formula(inputs$working.msm), data=data.frame(Y=1, stacked.summary.measures)))
@@ -358,7 +360,7 @@ FixedTimeTMLE <- function(inputs, weights) {
         subs[, i] <- uncensored & !deterministic.list.origdata$is.deterministic
       }
       if (any(subs[, i])) {
-        Q.est <- Estimate(inputs$Qform[j], data=data.frame(data, Q.kplus1=Qstar.kplus1[, i]), family="quasibinomial", newdata=newdata, subs=subs[, i], SL.library=inputs$SL.library.Q, type="link", nodes=nodes)
+        Q.est <- Estimate(inputs$Qform[j], data=data.frame(data, Q.kplus1=Qstar.kplus1[, i]), family="quasibinomial", newdata=newdata, subs=subs[, i], SL.library=inputs$SL.library.Q, SLcvControl=inputs$SLcvControl, type="link", nodes=nodes)
         logitQ[, i] <- Q.est$predicted.values
       } else {
         if (! all(deterministic.list.newdata$is.deterministic)) {
@@ -412,7 +414,7 @@ FixedTimeTMLE <- function(inputs, weights) {
               }
               sparsity.data[, nodes$Y[length(nodes$Y)]] <- Z
               #do we want Y~1 or Y~-1 + S1 with S1=1s with right size? like ltmle
-              beta0 <- plogis(ltmleMSM(sparsity.data, Anodes=inputs$nodes$A, Cnodes=inputs$nodes$C, Lnodes=inputs$nodes$L, Ynodes=inputs$nodes$Y, survivalOutcome=FALSE, Qform=inputs$Qform, gform=drop3(cum.g[, , 1, drop=FALSE]), regimes=inputs$regimes, working.msm="Y~1", summary.measures=array(dim=c(num.regimes, 0, 1)), final.Ynodes=max(inputs$nodes$Y), gbounds=inputs$gbounds, deterministic.g.function=inputs$deterministic.g.function, stratify=inputs$stratify, SL.library=NULL, estimate.time=FALSE, gcomp=FALSE, mhte.iptw=FALSE, iptw.only=FALSE, deterministic.Q.function=NULL, variance.options=NULL, Yrange=c(0, max(Z)), msm.weights=matrix(h1, ncol=1))$beta[1])
+              beta0 <- plogis(ltmleMSM(sparsity.data, Anodes=inputs$nodes$A, Cnodes=inputs$nodes$C, Lnodes=inputs$nodes$L, Ynodes=inputs$nodes$Y, survivalOutcome=FALSE, Qform=inputs$Qform, gform=drop3(cum.g[, , 1, drop=FALSE]), regimes=inputs$regimes, working.msm="Y~1", summary.measures=array(dim=c(num.regimes, 0, 1)), final.Ynodes=max(inputs$nodes$Y), gbounds=inputs$gbounds, deterministic.g.function=inputs$deterministic.g.function, stratify=inputs$stratify, SL.library=NULL, SLcvControl=list(), estimate.time=FALSE, gcomp=FALSE, mhte.iptw=FALSE, iptw.only=FALSE, deterministic.Q.function=NULL, variance.options=NULL, Yrange=c(0, max(Z)), msm.weights=matrix(h1, ncol=1))$beta[1])
               sparsityAdj[k] <- beta0 * max(Z) * sum(h1) 
               cat("Z:")
               print(summary(Z))
@@ -424,7 +426,7 @@ FixedTimeTMLE <- function(inputs, weights) {
             #not sure about some parameters in calling ltmle
             #Ynodes probably excluded from Qform if Qform=NULL and survivalFunction - is that ok?
             sparsity.data[, nodes$Y[length(nodes$Y)]] <- tempY <- 1/cum.g.for.sparsity.adj[, length(nodes$AC), 1] * Qstar[, 1] * (1 - Qstar[, 1])
-            sparsityAdj <- ltmle(sparsity.data, Anodes=inputs$nodes$A, Cnodes=inputs$nodes$C, Lnodes=inputs$nodes$L, Ynodes=inputs$nodes$Y, survivalOutcome=FALSE, Qform=inputs$Qform, gform=drop3(cum.g[, , 1, drop=FALSE]), abar=drop3(inputs$regimes[, , 1, drop=FALSE]), gbounds=inputs$gbounds, deterministic.g.function=inputs$deterministic.g.function, stratify=inputs$stratify, SL.library=NULL, estimate.time=FALSE, gcomp=FALSE, mhte.iptw=FALSE, iptw.only=FALSE, deterministic.Q.function=NULL, variance.options=NULL, Yrange=c(0, max(tempY)))$estimates["tmle"]
+            sparsityAdj <- ltmle(sparsity.data, Anodes=inputs$nodes$A, Cnodes=inputs$nodes$C, Lnodes=inputs$nodes$L, Ynodes=inputs$nodes$Y, survivalOutcome=FALSE, Qform=inputs$Qform, gform=drop3(cum.g[, , 1, drop=FALSE]), abar=drop3(inputs$regimes[, , 1, drop=FALSE]), gbounds=inputs$gbounds, deterministic.g.function=inputs$deterministic.g.function, stratify=inputs$stratify, SL.library=NULL, SLcvControl=list(), estimate.time=FALSE, gcomp=FALSE, mhte.iptw=FALSE, iptw.only=FALSE, deterministic.Q.function=NULL, variance.options=NULL, Yrange=c(0, max(tempY)))$estimates["tmle"]
             
             curIC <- 0 #fixme!
           }
@@ -911,6 +913,7 @@ GetEffectMeasures <- function(est0, IC0, est1, IC1, binaryOutcome) {
 }
 
 # Calculate IPTW and naive estimates
+# OS 06/19/14: Changed to output both, bounded and unbounded iptw estimators
 CalcIPTW <- function(data, nodes, abar, cum.g, mhte.iptw) {
   n <- nrow(data)
   final.Ynode <- nodes$Y[length(nodes$Y)]
@@ -972,7 +975,7 @@ EstimateG <- function(inputs, abar) {
       } else {
         # not all rows are set deterministically
         if (any(subs)) {
-          g.est <- Estimate(inputs$gform[i], data=inputs$data, subs=subs, family="binomial", newdata=newdata, SL.library=inputs$SL.library.g, type="response", nodes=inputs$nodes)
+          g.est <- Estimate(inputs$gform[i], data=inputs$data, subs=subs, family="binomial", newdata=newdata, SL.library=inputs$SL.library.g, SLcvControl=inputs$SLcvControl, type="response", nodes=inputs$nodes)
           probAis1 <- g.est$predicted.values
         } else {
           msg <- paste0("ltmle failed trying to estimate ", inputs$gform[i], " because there are no observations that are\nuncensored", ifelse(inputs$stratify, ", follow abar,", ""), " and are not set deterministically due to death or deterministic.g.function or deterministic.Q.function\n")
@@ -1024,7 +1027,7 @@ NodeToIndex <- function(data, node) {
 }
 
 # Run GLM or SuperLearner
-Estimate <- function(form, data, subs, family, newdata, SL.library, type, nodes) {
+Estimate <- function(form, data, subs, family, newdata, SL.library, SLcvControl, type, nodes) {
   stopifnot(type %in% c("link", "response"))
 
   ############################################################
@@ -1040,8 +1043,17 @@ Estimate <- function(form, data, subs, family, newdata, SL.library, type, nodes)
     #estimate using GLM
     if (sum(subs) > 1) {
       SuppressGivenWarnings({
-        m <- get.stack("glm.ltmle.memoized", mode="function", ifnotfound=glm.ltmle)(form, data=data[subs, all.vars(f), drop=F], family=family, control=glm.control(trace=FALSE, maxit=1000)) #there's probably a better way to do this
-        predicted.values <- predict(m, newdata=newdata, type=type)
+        if (family%in%c("quasibinomial","binomial")) {
+          # message("Running fast glm, all covariates must be numeric (except for censoring)")
+          X_mat <- as.matrix(data[subs, all.vars(f)[-1], drop=F])
+          Y_vals <- data[subs, all.vars(f)[1]]
+          m <- .f.est_binom_fast(X_mat=X_mat, Y_vals=Y_vals)
+          new_mtx <- as.matrix(newdata[, all.vars(f)[-1], drop=F])
+          predicted.values <- .f_predict_fast(glmfit=m, new_mtx=new_mtx, type=type)
+        } else {
+          m <- get.stack("glm.ltmle.memoized", mode="function", ifnotfound=glm.ltmle)(form, data=data[subs, all.vars(f), drop=F], family=family, control=glm.control(trace=FALSE, maxit=1000)) #there's probably a better way to do this
+          predicted.values <- predict(m, newdata=newdata, type=type)
+        }
       }, GetWarningsToSuppress())
     } else {
       #glm breaks when sum(subs) == 1
@@ -1056,7 +1068,8 @@ Estimate <- function(form, data, subs, family, newdata, SL.library, type, nodes)
     new.subs <- apply(newdata[, rhs, drop=FALSE], 1, function (x) !any(is.na(x)))  #remove NA values from newdata - these will output to NA anyway and cause errors in SuperLearner
     Y <- data[subs, LhsVars(f)]
     try.result <- try({
-      SuppressGivenWarnings(m <- SuperLearner(Y=Y, X=data[subs, rhs, drop=FALSE], SL.library=SL.library, verbose=FALSE, family=family, newX=newdata[new.subs, rhs, drop=FALSE]), "non-integer #successes in a binomial glm!") 
+      SuppressGivenWarnings(m <- SuperLearner(Y=Y, X=data[subs, rhs, drop=FALSE], SL.library=SL.library, cvControl=SLcvControl, verbose=FALSE, family=family, newX=newdata[new.subs, rhs, drop=FALSE]), "non-integer #successes in a binomial glm!")
+      # SuppressGivenWarnings(m <- subsemble_wrap(Y=Y, X=data[subs, rhs, drop=FALSE], newX=newdata[new.subs, rhs, drop=FALSE], learner=SL.library, metalearner="SL.glm", subsets = 20, family=family, cvControl=SLcvControl, genControl=list(saveFits=FALSE), parallel="multicore"), "non-integer #successes in a binomial glm!")
     })
     
     GetSLStopMsg <- function(Y) ifelse(all(Y %in% c(0, 1, NA)), "", "\n Note that many SuperLeaner libraries crash when called with continuous dependent variables, as in the case of initial Q regressions with continuous Y or subsequent Q regressions even if Y is binary.")
@@ -1064,10 +1077,12 @@ Estimate <- function(form, data, subs, family, newdata, SL.library, type, nodes)
       stop(paste("\n\nError occured during call to SuperLearner:\n", form, GetSLStopMsg(Y), "\n The error reported is:\n", try.result))
     }
     if (all(is.na(m$SL.predict))) {
+    # if (all(is.na(m$pred))) {      
       stop(paste("\n\nSuperLearner returned all NAs during regression:\n", form, GetSLStopMsg(Y)))
     }
     predicted.values <- rep(NA, nrow(newdata))
     predicted.values[new.subs] <- m$SL.predict
+    # predicted.values[new.subs] <- m$pred
     if (max(predicted.values, na.rm=T) > 1 || min(predicted.values, na.rm=T) < 0) {
       stop("predicted.values > 1 or < 0")
     }
@@ -1077,6 +1092,26 @@ Estimate <- function(form, data, subs, family, newdata, SL.library, type, nodes)
     }
   }
   return(list(predicted.values=predicted.values, fit=m))
+}
+
+#-----------------------------------------------------------------
+# 06/04/14 OS: For family="binomial" using two functions below instead of glm() & glm.predict() calls (faster binomial glm)
+#-----------------------------------------------------------------
+# USE glm.fit FUNCTION FOR FASTER FITTING of LOGISTIC REG
+# TAKES DESIGN MAT AND Y VECTOR
+.f.est_binom_fast <- function(X_mat, Y_vals) {
+  ctrl <- glm.control(trace=FALSE, maxit=1000)          
+    SuppressGivenWarnings({
+              m.fit <- glm.fit(x=cbind(1,X_mat), y=Y_vals, family = binomial(), control=ctrl)
+              }, GetWarningsToSuppress())
+    return(m.fit)
+}
+# Predict if glm.fit was used for fitting (for new design matrix)
+.f_predict_fast <- function(glmfit, new_mtx, type) {
+      new_mtx <- cbind(1,new_mtx)
+      eta <- new_mtx[,!is.na(glmfit$coef), drop=FALSE] %*% glmfit$coef[!is.na(glmfit$coef)]
+      if (type%in%"response") Ypred <- glmfit$family$linkinv(eta) else Ypred <- eta
+      return(Ypred)
 }
 
 # This is here for memoizing
@@ -1231,8 +1266,8 @@ RhsVars <- function(f) {
 }
 
 # Error checking for inputs
-CheckInputs <- function(data, nodes, survivalOutcome, Qform, gform, gbounds, Yrange, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, msm.weights, deterministic.Q.function) {
-  if (!all(is.null(GetLibrary(SL.library, "Q")), is.null(GetLibrary(SL.library, "g")))) library("SuperLearner")
+CheckInputs <- function(data, nodes, survivalOutcome, Qform, gform, gbounds, Yrange, deterministic.g.function, SL.library, SLcvControl, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, msm.weights, deterministic.Q.function) {
+  if (!all(is.null(GetLibrary(SL.library, "Q")), is.null(GetLibrary(SL.library, "g")))) { library("SuperLearner"); library("subsemble") }
   #each set of nodes should be sorted - otherwise causes confusion with gform, Qform, abar
   if (is.unsorted(nodes$A, strictly=TRUE)) stop("Anodes must be in increasing order")
   if (is.unsorted(nodes$C, strictly=TRUE)) stop("Cnodes must be in increasing order")
