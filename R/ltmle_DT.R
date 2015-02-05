@@ -23,13 +23,8 @@ require(speedglm)
 # USE speedglm.wfit FUNCTION FOR FASTER FITTING of LOGISTIC REG
 # TAKES DESIGN MAT AND Y VECTOR
 # returns an object of class speedglm
-.fspeedglm <- function(X_mat, Y_vals) {
-  # ctrl <- glm.control(trace=FALSE, maxit=1000)
-    # SuppressGivenWarnings({
-    # m.fit <- speedglm.wfit(y=Y_vals, X=X_mat, family = binomial(), control=ctrl)
-    # print("head(Y_vals)"); print(head(Y_vals))
-    # print("unique(Y_vals)"); print(unique(Y_vals))
-    # print("head(X_mat)"); print(head(X_mat))
+.fspeedglm <- function(X_mat, Y_vals, intercept=FALSE) {
+  # intercept - not implemented yet
 
     m.fit <- try(speedglm.wfit(y=Y_vals, X=X_mat, family = binomial(), maxit=25, intercept=FALSE))
     if(inherits(m.fit, "try-error")) {
@@ -43,8 +38,26 @@ require(speedglm)
     return(m.fit)
 }
 
+.fspeedglm_Qupdate <- function(X_mat, Y_vals, offset, weights) {
+    m.fit <- try(speedglm.wfit(y=Y_vals, X=X_mat, offset=offset, weights=weights, family = quasibinomial(), maxit=100, intercept=FALSE))
+    if(inherits(m.fit, "try-error")) {
+      warning("speedglm failed, attempting to use glm.fit")
+      m.fit <- try(glm.fit(x=X_mat, y=Y_vals, offset=offset, weights=weights, family = binomial(), control=list(maxit=100), intercept=FALSE))
+    }
+    if(inherits(m.fit, "try-error")) {
+      stop("glm.fit failed as well")
+    }
+    print("m.fit$coefficients"); print(m.fit$coefficients)
+
+    return(m.fit)
+}
+
+
 # Predict from speedglm.wfit 
-.f_predict_fast <- function(glmfit, new_mtx, type) {
+.f_predict_fast <- function(glmfit, new_mtx, type, intercept=FALSE) {
+
+    # intercept - not implemented yet
+
     # glmfit$family
     # glmfit$link
     coefs <- glmfit$coefficients
@@ -710,31 +723,34 @@ UpdateQ <- function(Qstar.kplus1, logitQ, stacked.summary.measures, subs, cum.g,
   off <- as.vector(logitQ)
   Y <- as.vector(Qstar.kplus1)
   weight.vec <- rep(weights, each=n)
+
   X <- stacked.summary.measures / matrix(cum.g, nrow=nrow(stacked.summary.measures), ncol=ncol(stacked.summary.measures))
   indicator <- matrix(uncensored, nrow=nrow(stacked.summary.measures), ncol=ncol(stacked.summary.measures)) *matrix(intervention.match, nrow=nrow(stacked.summary.measures), ncol=ncol(stacked.summary.measures)) #I(A=rule and uncensored)
+  # data.temp <- data.frame(Y, X * indicator, off)
   f <- as.formula(paste(working.msm, "+ offset(off) - 1"))
-  data.temp <- data.frame(Y, X * indicator, off)
+
   if (gcomp) {
     Qstar <- plogis(logitQ)
     m <- "no Qstar fit because gcomp=TRUE (so no updating step)"
   } else {
-    ctrl <- glm.control(trace=FALSE, maxit=1000)
+    # ctrl <- glm.control(trace=FALSE, maxit=1000)
+    # SuppressGivenWarnings(m <- glm(f, data=data.temp, subset=as.vector(subs), family="quasibinomial", weights=weight.vec, control=ctrl), GetWarningsToSuppress(TRUE)) #this should include the indicators
+    m <- .fspeedglm_Qupdate(X_mat=(X*indicator)[subs,,drop=FALSE], Y_vals=Y[subs], offset=off[subs], weights=weight.vec[subs])
 
+    # newdata <- data.frame(Y, X, off)
+    # SuppressGivenWarnings(Qstar <- matrix(predict(m, newdata=newdata, type="response"), nrow=nrow(logitQ)), GetWarningsToSuppress(TRUE))  #this should NOT include the indicators  #note: could also use plogis(off + X %*% coef(m))
 
-
-
-
-
-    SuppressGivenWarnings(m <- glm(f, data=data.temp, subset=as.vector(subs), family="quasibinomial", weights=weight.vec, control=ctrl), GetWarningsToSuppress(TRUE)) #this should include the indicators
-    newdata <- data.frame(Y, X, off)
-    SuppressGivenWarnings(Qstar <- matrix(predict(m, newdata=newdata, type="response"), nrow=nrow(logitQ)), GetWarningsToSuppress(TRUE))  #this should NOT include the indicators  #note: could also use plogis(off + X %*% coef(m))
-
-
-
-
-
+    # new_mtx <- cbind(X, off)
+    # print("class(new_mtx)"); print(class(new_mtx))
+    # predicted.values <- .f_predict_fast(glmfit=m, new_mtx=new_mtx, type="response", intercept=FALSE)
+    # Qstar <- matrix(predicted.values, nrow=nrow(logitQ))  #this should NOT include the indicators  #note: could also use plogis(off + X %*% coef(m))
+    Qstar <- matrix(plogis(off + (X %*% m$coefficients)), nrow=nrow(logitQ))
 
   }
+
+
+
+  data.temp <- data.frame(Y, X * indicator, off)
   h.g.ratio <- model.matrix(f, model.frame(f, data=data.temp, na.action=na.pass)) #this should include the indicators
   dim(h.g.ratio) <- c(n, num.regimes, ncol(h.g.ratio))
   for (i in 1:num.regimes) {
