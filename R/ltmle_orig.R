@@ -14,64 +14,8 @@
 #   }
 #   return(runif(n=n))
 # }
-require(data.table)
-require(speedglm)
 
-#-----------------------------------------------------------------
-# 06/04/14 OS: For family="binomial" using two functions below instead of glm() & glm.predict() calls (faster binomial glm)
-#-----------------------------------------------------------------
-# USE speedglm.wfit FUNCTION FOR FASTER FITTING of LOGISTIC REG
-# TAKES DESIGN MAT AND Y VECTOR
-# returns an object of class speedglm
-.fspeedglm <- function(X_mat, Y_vals) {
-  # ctrl <- glm.control(trace=FALSE, maxit=1000)
-    # SuppressGivenWarnings({
-    # m.fit <- speedglm.wfit(y=Y_vals, X=X_mat, family = binomial(), control=ctrl)
-    # print("head(Y_vals)"); print(head(Y_vals))
-    # print("unique(Y_vals)"); print(unique(Y_vals))
-    # print("head(X_mat)"); print(head(X_mat))
-
-    m.fit <- try(speedglm.wfit(y=Y_vals, X=X_mat, family = binomial(), maxit=25, intercept=FALSE))
-    if(inherits(m.fit, "try-error")) {
-      warning("speedglm failed, attempting to use glm.fit")
-      m.fit <- try(glm.fit(x=X_mat, y=Y_vals, family = binomial(), control=list(maxit=25), intercept=FALSE))
-    }
-    if(inherits(m.fit, "try-error")) {
-      stop("glm.fit failed as well")
-    }
-              # }, GetWarningsToSuppress())
-    return(m.fit)
-}
-
-# Predict from speedglm.wfit 
-.f_predict_fast <- function(glmfit, new_mtx, type) {
-    # glmfit$family
-    # glmfit$link
-    coefs <- glmfit$coefficients
-    famlogist <- binomial()
-    linkinv <- famlogist$linkinv
-
-    # new_mtx <- cbind(1,new_mtx)
-
-    eta <- new_mtx[,!is.na(coefs), drop=FALSE] %*% coefs[!is.na(coefs)]      
-    if (type%in%"response") Ypred <- linkinv(eta=eta) else Ypred <- eta
-
-    return(Ypred)
-}
-
-
-datenv <- new.env(parent = emptyenv())
-datenv$uncensored_val <- 1L
-datenv$IDrows <- NULL
-datenv$dataC_DT <- NULL
-datenv$dataA_DT <- NULL
-datenv$dataY_DT <- NULL
-datenv$regimes <- NULL
-# opts$vecfun <- NULL
-# opts$debug <- FALSE
-
-
-# Longitudinal TMLE to estimate an intervention-specific mean outcome or marginal structural model
+ # Longitudinal TMLE to estimate an intervention-specific mean outcome or marginal structural model
 
 # General code flow:
 #  ltmle -> CreateInputs -> LtmleFromInputs -> ltmleMSM.private(pooledMSM=T) -> ...
@@ -104,7 +48,6 @@ ltmle <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOutcom
 # ltmle is a special case of ltmleMSM - get the arguments used by ltmleMSM for the special case
 GetMSMInputsForLtmle <- function(abar, Ynodes) {
   regimes <- abar
-
   dim(regimes) <- c(nrow(regimes), ncol(regimes), 1)
   working.msm <- "Y ~ -1 + S1"
   summary.measures <- array(1, dim=c(1, 1, 1))
@@ -157,7 +100,7 @@ LtmleFromInputs <- function(inputs) {
 
 #longitudinal targeted maximum likelihood estimation for a marginal structural model
 #' @export 
-ltmleMSM <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOutcome=NULL, Qform=NULL, gform=NULL, gbounds=c(0.01, 1), Yrange=NULL, deterministic.g.function=NULL, SL.library=NULL, regimes, working.msm, summary.measures, summary.baseline.covariates=NULL, final.Ynodes=NULL, pooledMSM=TRUE, stratify=FALSE, msm.weights=NULL, estimate.time=nrow(data) > 50, gcomp=FALSE, mhte.iptw=FALSE, iptw.only=FALSE, deterministic.Q.function=NULL, memoize=FALSE, variance.options=NULL) {
+ltmleMSM <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOutcome=NULL, Qform=NULL, gform=NULL, gbounds=c(0.01, 1), Yrange=NULL, deterministic.g.function=NULL, SL.library=NULL, regimes, working.msm, summary.measures, summary.baseline.covariates=NULL, final.Ynodes=NULL, pooledMSM=TRUE, stratify=FALSE, msm.weights=NULL, estimate.time=nrow(data) > 50, gcomp=FALSE, mhte.iptw=FALSE, iptw.only=FALSE, deterministic.Q.function=NULL, memoize=TRUE, variance.options=NULL) {
   if (memoize && require(memoise)) {
     glm.ltmle.memoized <- memoize(glm.ltmle)
   }
@@ -186,55 +129,14 @@ ltmleMSM.private <- function(inputs) {
 CreateInputs <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, Qform, gform, gbounds, Yrange, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, msm.weights, estimate.time, gcomp, normalizeIC, mhte.iptw, iptw.only, deterministic.Q.function, variance.options) {
 
 
-
-
-  # split the data into C, A and Y parts and put in global data.table, appropriately sorted for future subsetting
-  data[Cnodes] <- ConvertCensoringNodesToBinary(data[Cnodes])
-  IDrows <- c(1:nrow(data))
-  datenv$IDrows <- IDrows
-  datenv$dataC_DT <- data.table(IDrows, data[Cnodes])
-  setkeyv(datenv$dataC_DT, c(Cnodes))
-  print("dataC_DT"); print(datenv$dataC_DT); 
-
-  datenv$dataA_DT <- data.table(IDrows, data[Anodes])
-  setkeyv(datenv$dataA_DT, c("IDrows",Anodes))
-
-  datenv$dataY_DT <- data.table(IDrows, data[Ynodes])
-  setkeyv(datenv$dataY_DT, c(Ynodes))
-
   if (is.list(regimes)) {
     if (!all(do.call(c, lapply(regimes, is.function)))) stop("If 'regimes' is a list, then all elements should be functions.")
     regimes <- aperm(simplify2array(lapply(regimes, function(rule) apply(data, 1, rule)), higher=TRUE), c(2, 1, 3)) 
   }
-
-
-
-
-
-  abar <- regimes[,,1]
-  print("abar"); print(dim(abar)); print(head(abar)); 
-  # dim(regimes) <- c(nrow(regimes), ncol(regimes), 1)
-  # abar_DT <- setDT(data.frame(IDrows=datenv$IDrows, abar))
-  datenv$regimes$abar_DT <- setDT(data.frame(IDrows=datenv$IDrows, abar))
-  names(datenv$regimes$abar_DT) <- names(datenv$dataA_DT)
-  setkeyv(datenv$regimes$abar_DT, c("IDrows",Anodes))
-  print("abar_DT"); print(datenv$regimes$abar_DT)
-
-
-
-
   
   nodes <- CreateNodes(data, Anodes, Cnodes, Lnodes, Ynodes)
   Qform <- CreateLYNodes(data, nodes, check.Qform=TRUE, Qform=Qform)$Qform
-
-
-
-
-  # data <- ConvertCensoringNodes(data, Cnodes, has.deterministic.functions=!is.null(deterministic.g.function) && is.null(deterministic.Q.function))
-
-
-
-
+  data <- ConvertCensoringNodes(data, Cnodes, has.deterministic.functions=!is.null(deterministic.g.function) && is.null(deterministic.Q.function))
   if (is.null(final.Ynodes)) {
     final.Ynodes <- max(nodes$Y)
   } else {
@@ -254,9 +156,9 @@ CreateInputs <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, 
   #error checking (also get value for survivalOutcome if NULL)
   check.results <- CheckInputs(data, nodes, survivalOutcome, Qform, gform, gbounds, Yrange, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, msm.weights, deterministic.Q.function)
   survivalOutcome <- check.results$survivalOutcome
-  
+
   # data <- CleanData(data, nodes, deterministic.Q.function, survivalOutcome)
-  
+
   untransformed.data <- data
   transform.list <- TransformOutcomes(data, nodes, Yrange)
   data <- transform.list$data
@@ -419,9 +321,6 @@ FitPooledMSM <- function(working.msm, Qstar, summary.measures, weights, summary.
   # OS modified:
   m.beta <- predict.glm(m, type="response")
 
-  # print("dim(m.beta)"); print(dim(m.beta))
-  # print("dim(Qstar)"); print(dim(Qstar))
-
   dim(m.beta) <- dim(Qstar)
   return(list(m=m, m.beta=m.beta))
 }
@@ -464,43 +363,13 @@ FixedTimeTMLE <- function(inputs, weights) {
   names(fit.Q) <- names(fit.Qstar) <- names(data)[nodes$LY]
   for (j in length(nodes$LY):1){
     cur.node <- nodes$LY[j]
-
-
-
-
     deterministic.list.origdata <- IsDeterministic(data, cur.node, inputs$deterministic.Q.function, nodes, called.from.estimate.g=FALSE, inputs$survivalOutcome)
-    
-
-    
-
-    # uncensored <- IsUncensored(data, nodes$C, cur.node)
-    uncensored <- IsUncensored_DT(nodes$C, cur.node)
-
-
-
-
+    uncensored <- IsUncensored(data, nodes$C, cur.node)
     intervention.match <- subs <- matrix(nrow=n, ncol=num.regimes)
     for (i in regimes.with.positive.weight) {
-      
-
-
-
-
       abar <- GetABar(inputs$regimes, i)
-      # intervention.match[, i] <- InterventionMatch(data, abar=abar, nodes$A, cur.node) 
-      # abar_DT <- setDT(data.frame(IDrows=datenv$IDrows, abar))
-      # names(abar_DT) <- names(datenv$dataA_DT)
-      # setkeyv(abar_DT, c("IDrows",names(data)[nodes$A]))
-      intervention.match[, i] <- InterventionMatch_DT(abar_DT=datenv$regimes$abar_DT, Anodes=nodes$A, cur.node=cur.node)
-      
-      
-
-
-
-
-
+      intervention.match[, i] <- InterventionMatch(data, abar=abar, nodes$A, cur.node)  
       newdata <- SetA(data, abar=abar, nodes, cur.node)
-
       deterministic.list.newdata <- IsDeterministic(newdata, cur.node, inputs$deterministic.Q.function, nodes, called.from.estimate.g=FALSE, inputs$survivalOutcome)
       if (inputs$stratify) {
         subs[, i] <- uncensored & intervention.match[, i] & !deterministic.list.origdata$is.deterministic
@@ -719,21 +588,9 @@ UpdateQ <- function(Qstar.kplus1, logitQ, stacked.summary.measures, subs, cum.g,
     m <- "no Qstar fit because gcomp=TRUE (so no updating step)"
   } else {
     ctrl <- glm.control(trace=FALSE, maxit=1000)
-
-
-
-
-
-
     SuppressGivenWarnings(m <- glm(f, data=data.temp, subset=as.vector(subs), family="quasibinomial", weights=weight.vec, control=ctrl), GetWarningsToSuppress(TRUE)) #this should include the indicators
     newdata <- data.frame(Y, X, off)
     SuppressGivenWarnings(Qstar <- matrix(predict(m, newdata=newdata, type="response"), nrow=nrow(logitQ)), GetWarningsToSuppress(TRUE))  #this should NOT include the indicators  #note: could also use plogis(off + X %*% coef(m))
-
-
-
-
-
-
   }
   h.g.ratio <- model.matrix(f, model.frame(f, data=data.temp, na.action=na.pass)) #this should include the indicators
   dim(h.g.ratio) <- c(n, num.regimes, ncol(h.g.ratio))
@@ -1077,13 +934,8 @@ CalcIPTW <- function(data, nodes, abar, cum.g, mhte.iptw) {
   n <- nrow(data)
   final.Ynode <- nodes$Y[length(nodes$Y)]
   
-  # uncensored <- IsUncensored(data, nodes$C, final.Ynode)
-  uncensored <- IsUncensored_DT(nodes$C, final.Ynode)
-
-
-  # intervention.match <- InterventionMatch(data, abar, nodes$A, final.Ynode)  #A==abar for all A
-  intervention.match <- InterventionMatch_DT(abar_DT=datenv$regimes$abar_DT, Anodes=nodes$A, cur.node=final.Ynode)  #A==abar for all A
-
+  uncensored <- IsUncensored(data, nodes$C, final.Ynode)
+  intervention.match <- InterventionMatch(data, abar, nodes$A, final.Ynode)  #A==abar for all A
   index <- uncensored & intervention.match
   
   Y <- data[index, final.Ynode]
@@ -1122,27 +974,10 @@ EstimateG <- function(inputs, abar) {
       deterministic.g.list.origdata <- IsDeterministicG(inputs$data, cur.node, inputs$deterministic.g.function, inputs$nodes) #deterministic due to acnode map - using original data
       deterministic.g.list.newdata <- IsDeterministicG(newdata, cur.node, inputs$deterministic.g.function, inputs$nodes) #deterministic due to acnode map - using data modified so A = abar
       deterministic.g.origdata <- deterministic.g.list.origdata$is.deterministic
+      uncensored <- IsUncensored(inputs$data, inputs$nodes$C, cur.node)
       
-
-      # uncensored <- IsUncensored(inputs$data, inputs$nodes$C, cur.node)
-      uncensored <- IsUncensored_DT(inputs$nodes$C, cur.node)
-      
-
-
       if (inputs$stratify) {
-        
-
-
-
-
-
-        # intervention.match <- InterventionMatch(inputs$data, abar, inputs$nodes$A, inputs$nodes$AC[i]) 
-        intervention.match <- InterventionMatch_DT(abar_DT=datenv$regimes$abar_DT, Anodes=inputs$nodes$A, cur.node=inputs$nodes$AC[i])
-
-
-
-
-
+        intervention.match <- InterventionMatch(inputs$data, abar, inputs$nodes$A, inputs$nodes$AC[i]) 
         subs <- uncensored & intervention.match & !deterministic.origdata & !deterministic.g.origdata
       } else {
         subs <- uncensored & !deterministic.origdata & !deterministic.g.origdata
@@ -1209,38 +1044,15 @@ NodeToIndex <- function(data, node) {
 # Run GLM or SuperLearner
 Estimate <- function(form, data, subs, family, newdata, SL.library, type, nodes) {
   stopifnot(type %in% c("link", "response"))
-
-  ############################################################
-  #05/29/14 OS: Problem area:
-  # data <- ConvertCensoringNodesToBinary(data, nodes$C) #convert factors to binaries for compatability with glm and some SL libraries
-  # replaced with:
-  # data[,nodes$C] <- ConvertCensoringNodesToBinary(data[,nodes$C]) #convert factors to binaries for compatability with glm and some SL libraries
-  ############################################################
-
+  data <- ConvertCensoringNodesToBinary(data, nodes$C) #convert factors to binaries for compatability with glm and some SL libraries
   f <- as.formula(form)
   if (any(is.na(data[subs, LhsVars(f)]))) stop("NA in Estimate")
   if (is.null(SL.library) || length(RhsVars(f)) == 0) { #in a formula like "Y ~ 1", call glm
     #estimate using GLM
     if (sum(subs) > 1) {
       SuppressGivenWarnings({
-   
-         # message("Running fast glm, all covariates must be numeric (except for censoring)")
-        X_mat <- as.matrix(data[subs, all.vars(f)[-1], drop=F])
-        Y_vals <- data[subs, all.vars(f)[1]]
-        m <- .fspeedglm(X_mat=X_mat, Y_vals=Y_vals)
-        new_mtx <- as.matrix(newdata[, all.vars(f)[-1], drop=F])
-        predicted.values <- .f_predict_fast(glmfit=m, new_mtx=new_mtx, type=type)
-
-
-        # m <- get.stack("glm.ltmle.memoized", mode="function", ifnotfound=glm.ltmle)(form, data=data[subs, all.vars(f), drop=F], family=family, control=glm.control(trace=FALSE, maxit=1000)) #there's probably a better way to do this
-        # m <- glm.ltmle(form, data=data[subs, all.vars(f), drop=F], family=family, control=glm.control(trace=FALSE, maxit=1000)) #there's probably a better way to do this
-        
-        # OS: to turn glm off
-        # nsamp <- sum(subs)
-        # m <- glm.ltmle(form, n=nsamp, family=family, control=glm.control(trace=FALSE, maxit=1000)) #there's probably a better way to do this
-        
-        # predicted.values <- predict(m, newdata=newdata, type=type)
-
+        m <- get.stack("glm.ltmle.memoized", mode="function", ifnotfound=glm.ltmle)(form, data=data[subs, all.vars(f), drop=F], family=family, control=glm.control(trace=FALSE, maxit=1000)) #there's probably a better way to do this
+        predicted.values <- predict(m, newdata=newdata, type=type)
       }, GetWarningsToSuppress())
     } else {
       #glm breaks when sum(subs) == 1
@@ -1281,9 +1093,8 @@ Estimate <- function(form, data, subs, family, newdata, SL.library, type, nodes)
 # OS modified:
 # This is here for memoizing
 glm.ltmle <- function(f, data, family, control) {
-# glm.ltmle <- function(f, n, data, family, control) {
   return(glm(f, data=data, family=family, control=control))
-  # return(list(n=n))
+  # return(list(n=nrow(data)))
 }
 
 # Calculate bounded cumulative G
@@ -1300,60 +1111,12 @@ InterventionMatch <- function(data, abar, Anodes, cur.node) {
   return(intervention.match)
 }
 
-InterventionMatch_DT <- function(abar_DT, Anodes, cur.node) {
-  if (!any(Anodes < cur.node)) return(rep(TRUE, nrow(datenv$dataA_DT)))
-  last.Anode.index <- which.max(Anodes[Anodes < cur.node])
-  matxeq <- datenv$dataA_DT[,c(2:(last.Anode.index+1)), with=FALSE] != abar_DT[,c(2:(last.Anode.index+1)), with=FALSE]
-  matxeq[is.na(matxeq)] <- FALSE;
-  matmatch <- rowSums(matxeq); 
-  return(abar_DT$IDrows %in% which(matmatch==0))
-}
-
-
 # Determine which patients are uncensored
 #return vector of [numDataRows x 1] I(C=uncensored) from Cnodes[1] to the Cnode just before cur.node
 IsUncensored <- function(data, Cnodes, cur.node) {
   if (! all(sapply(data[, Cnodes], is.factor))) stop("something has gone wrong in ltmle:::IsUncensored - all Cnodes should have been converted to factors")
   uncensored <- XMatch(data, Xbar="uncensored", Cnodes, cur.node, all, default=TRUE)
   return(uncensored)
-}
-
-IsUncensored_DT <- function(Cnodes, cur.node) {
-  Cnode.val <- datenv$uncensored_val
-
-
-  f_makeDT <- function(varnames, valval) {
-    match_DT <- data.frame(rep(list(valval),length(varnames)))
-    names(match_DT) <- varnames
-    setDT(match_DT)
-  }
-  if (!any(Cnodes < cur.node)) return(rep(TRUE, nrow(datenv$dataC_DT)))
-
-  last.Cnode.index <- which.max(Cnodes[Cnodes < cur.node])
-
-  Cnodes.subset <- Cnodes[1:last.Cnode.index]
-  
-  varnames <- names(datenv$dataC_DT)[Cnodes.subset]
-  match_DT <- f_makeDT(varnames=varnames, valval=Cnode.val) # get an index data set with Cnode names up to cur.node
-
-  return(datenv$IDrows %in% datenv$dataC_DT[match_DT,IDrows]) # query data.table for IDs that have all censoring set to uncensored value
-}
-
-
-IsDead_DT <- function(Ynodes, cur.node) {
-  Ynodeval <- 1
-  if (!any(Ynodes < cur.node)) return(rep(FALSE, nrow(datenv$dataY_DT)))
-  last.Ynode.index <- which.max(Ynodes[Ynodes < cur.node])
-  varnames <- names(datenv$dataY_DT)[c(2:(last.Ynode.index+1))]
-  datenv$dataY_DT[is.na(datenv$dataY_DT)] <- 0
-  idx <- NULL
-  for (Yname in varnames) {
-    newidx <- datenv$dataY_DT[eval(parse(text=paste0(Yname,"==",Ynodeval))[1])]$IDrows
-    idx <- c(idx, newidx)
-  }
-  # subset_rows <- 
-  return(datenv$IDrows %in% idx)
-  # return(list(is.deterministic=subset_rows, Q.value=NULL))
 }
 
 # Determine which patients have died or have Q set deterministically by user function before cur.node
@@ -1363,17 +1126,7 @@ IsDead_DT <- function(Ynodes, cur.node) {
 IsDeterministic <- function(data, cur.node, deterministic.Q.function, nodes, called.from.estimate.g, survivalOutcome) {
   #set Q.value to 1 if previous y node is 1
   if (survivalOutcome) {
-
-
-
-
-     # is.deterministic <- XMatch(data, Xbar=1, nodes$Y, cur.node, any, default=FALSE) #deterministic if any previous y node is 1
-     is.deterministic <- IsDead_DT(Ynodes=nodes$Y, cur.node=cur.node)
-
-
-
-
-
+     is.deterministic <- XMatch(data, Xbar=1, nodes$Y, cur.node, any, default=FALSE) #deterministic if any previous y node is 1
   } else {
     is.deterministic <- rep(FALSE, nrow(data))
   }
@@ -1470,17 +1223,11 @@ CalcIC <- function(Qstar.kplus1, Qstar, h.g.ratio, uncensored, intervention.matc
 
 #Set the Anodes of d to abar and Cnodes to uncensored (up to and including cur.node - cur.node itself is included for consistency checking in DeterministicG)
 SetA <- function(data, abar, nodes, cur.node) {
-  # uncensored_val <- 1
   Anode.index <- nodes$A <= cur.node
   data[, nodes$A[Anode.index]] <- abar[, Anode.index]
+  
   Cnode.index <- nodes$C <= cur.node
-
-  # data[, nodes$C[Cnode.index]] <- factor(rep("uncensored", nrow(data))) #recycled
-  # data[, nodes$C[Cnode.index]] <- rep.int(datenv$uncensored_val, nrow(data)) #recycled
-  # print("class(data[, nodes$C[1]])"); print(class(data[, nodes$C[1]]))
-  for (indx in nodes$C[Cnode.index]) {
-    data[, indx] <- rep.int(datenv$uncensored_val, nrow(data)) #recycled
-  }
+  data[, nodes$C[Cnode.index]] <- factor(rep("uncensored", nrow(data))) #recycled
   return(data)
 }
 
@@ -1607,12 +1354,7 @@ CheckInputs <- function(data, nodes, survivalOutcome, Qform, gform, gbounds, Yra
   if (!all(regimes %in% c(0, 1, NA))) stop("all regimes should be binary")
   for (i in seq_along(nodes$A)) {
     cur.node <- nodes$A[i]
-
-    
-    # uncensored <- IsUncensored(data, nodes$C, cur.node)
-    uncensored <- IsUncensored_DT(nodes$C, cur.node)
-
-
+    uncensored <- IsUncensored(data, nodes$C, cur.node)
     deterministic <- IsDeterministic(data, cur.node, deterministic.Q.function, nodes, called.from.estimate.g=TRUE, survivalOutcome)$is.deterministic
     if (any(is.na(regimes[uncensored & !deterministic, i, ]))) {
       stop("NA in regimes/abar not allowed (except after censoring/death)")
@@ -1929,16 +1671,7 @@ GetMsmWeights <- function(inputs) {
   for (j in 1:num.final.Ynodes) {
     final.Ynode <- inputs$final.Ynodes[j]
     inputs.subset <- SubsetInputs(inputs, final.Ynode)
-
-
-
-
-    # uncensored <- IsUncensored(inputs.subset$data, inputs.subset$nodes$C, cur.node=final.Ynode)
-    uncensored <- IsUncensored_DT(inputs.subset$nodes$C, cur.node=final.Ynode)    
-
-
-
-
+    uncensored <- IsUncensored(inputs.subset$data, inputs.subset$nodes$C, cur.node=final.Ynode)
     if (num.regimes > 1) {
       is.duplicate <- duplicated(inputs.subset$regimes, MARGIN=3)
     } else {
@@ -1948,19 +1681,7 @@ GetMsmWeights <- function(inputs) {
       if (is.duplicate[i]) {
         weights[i, j] <- 0
       } else {
-
-
-
-
-        
-        intervention.match <- InterventionMatch_DT(abar_DT=datenv$regimes$abar_DT, Anodes=inputs.subset$nodes$A, cur.node=final.Ynode)
-        # intervention.match <- InterventionMatch(inputs.subset$data, abar=GetABar(inputs.subset$regimes, i), inputs.subset$nodes$A, cur.node=final.Ynode)
-
-
-
-
-
-
+        intervention.match <- InterventionMatch(inputs.subset$data, abar=GetABar(inputs.subset$regimes, i), inputs.subset$nodes$A, cur.node=final.Ynode)
         weights[i, j] <- sum(uncensored & intervention.match) / nrow(inputs.subset$data)
       } 
     }
@@ -2017,57 +1738,29 @@ ConvertCensoringNodes <- function(data, Cnodes, has.deterministic.functions=FALS
 }
 
 #Before passing data to SuperLearner, convert factors to binary
-# ConvertCensoringNodesToBinary <- function(data, Cnodes) {
-ConvertCensoringNodesToBinary <- function(Cdata) {
-
-  as.numeric.factor <- function(x) {as.numeric(levels(x))[x]}
-
-  # CensoringToBinary <- function(x) {
-  #   # if (! all(levels(x) %in% c("censored", "uncensored"))) {
-  #   #   stop("all levels of data[, Cnodes] should be in censored, uncensored (NA should not be a level)")
-  #   # }
-  #   # b <- rep(NA_integer_, length(x))
-  #   b <- matrix(data=NA_integer_, nrow=dim(x)[1], ncol=dim(x)[2])
-  #   b[x %in% "censored"] <- 0L
-  #   b[x %in% "uncensored"] <- 1L
-  #   return(b)
-  # }
-
+ConvertCensoringNodesToBinary <- function(data, Cnodes) {
+  CensoringToBinary <- function(x) {
+    if (! all(levels(x) %in% c("censored", "uncensored"))) {
+      stop("all levels of data[, Cnodes] should be in censored, uncensored (NA should not be a level)")
+    }
+    b <- rep(NA_integer_, length(x))
+    b[x == "censored"] <- 0L
+    b[x == "uncensored"] <- 1L
+    return(b)
+  }
+  
   error.msg <- "in data, all Cnodes should be factors with two levels, 'censored' and 'uncensored' \n (binary is also accepted, where 0=censored, 1=uncensored, but is not recommended)"
-  error.msg2 <- "all levels of data[, Cnodes] should be in censored, uncensored (NA should not be a level)"
-  someC_num <- FALSE
-  someC_fact <- FALSE
-  for (i in c(1:ncol(Cdata))) {
-    if (is.numeric(Cdata[, i])) {
-      if (! all(Cdata[, i] %in% c(0, 1, NA))) stop(error.msg)
-      someC_num <- TRUE
-    } else if (is.factor(Cdata[, i])) {
-      # print(levels(Cdata[, i]))
-      someC_fact <- TRUE
-      if (!all((as.vector(levels(Cdata[, i])))%in%c("censored", "uncensored"))) {
-        stop(error.msg2)
-      }
-
-      levels(Cdata[, i])[levels(Cdata[, i])%in%"censored"] <- 0
-      levels(Cdata[, i])[levels(Cdata[, i])%in%"uncensored"] <- 1
-      Cdata[, i] <- as.numeric.factor(Cdata[, i])
-
-      # data[, i] <- CensoringToBinary(col)
+  for (i in Cnodes) {
+    col <- data[, i]
+    if (is.numeric(col)) {
+      if (! all(col %in% c(0, 1, NA))) stop(error.msg)
+    } else if (is.factor(col)) {
+      data[, i] <- CensoringToBinary(col)
     } else {
       stop(error.msg)
-    }
+    } 
   }
-
-  if (someC_num & someC_fact) stop(error.msg)
-  # if (all(sapply(Cdata, is.factor))) {
-  # # if (someC_fact) {
-  #   if (!all((as.vector(unlist(sapply(Cdata, levels))))%in%c("censored", "uncensored"))) {
-  #     stop(error.msg2)
-  #   }
-  #   Cdata <- CensoringToBinary(Cdata)
-  # }
-
-  return(Cdata)
+  return(data)
 }
 
 # We don't want to show all of the warnings 
